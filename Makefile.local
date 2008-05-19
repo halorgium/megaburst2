@@ -6,7 +6,3 @@ EUNIT_ROOT=$(wildcard lib/eunit-2.0_beta_1)
 ifneq (${EUNIT_ROOT},lib/eunit-2.0_beta_1)
   EUNIT_ROOT=$(wildcard ../eunit)
 endif
-JUNGERL_ROOT?=$(wildcard /Users/nem/projects/erlang/jungerl)
-ifneq (${JUNGERL_ROOT},/Users/nem/projects/erlang/jungerl)
-  JUNGERL_ROOT=$(wildcard ../jungerl)
-endif
