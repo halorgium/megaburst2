@@ -1,4 +1,4 @@
--module(mb2_bencoding).
+-module(bencoding).
 -author("Tim Carey-Smith <tim@spork.in>").
 -vsn("1.0").
 
