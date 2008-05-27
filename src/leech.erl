@@ -14,13 +14,13 @@
 
 %% API
 -export([start_link/1,
-         status/1]).
+         update/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {metainfo}).
+-record(state, {metainfo, tracker_pid}).
 
 %%====================================================================
 %% API
@@ -33,8 +33,8 @@
 start_link(Metainfo) ->
     gen_server:start_link(?MODULE, [Metainfo], []).
 
-status(Pid) ->
-    gen_server:call(Pid, status).
+update(Pid, TrackerData) ->
+    gen_server:cast(Pid, {update, TrackerData}).
 
 %%====================================================================
 %% gen_server callbacks
@@ -70,10 +70,8 @@ init([Metainfo]) ->
 handle_call(start, _From, State = #state{metainfo = Metainfo}) ->
     {ok, Pid} = tracker:start_link(self(), Metainfo),
     ?INFO("Starting tracker: ~p~n", [Pid]),
-    {reply, ok, State};
-
-handle_call(status, _From, State) ->
-    {reply, {ok, State}, State};
+    ok = tracker:announce(Pid),
+    {reply, ok, State#state{tracker_pid = Pid}};
 
 handle_call(Call, _From, State) ->
     ?WARN("Unexpected call ~p~n", [Call]),
@@ -88,6 +86,11 @@ handle_call(Call, _From, State) ->
 %% @doc Cast message handler callbacks
 %% @end
 %%--------------------------------------------------------------------
+handle_cast({update, TrackerData = #tracker_data{peers = Peers}}, State = #state{metainfo = Metainfo}) ->
+    {Address, Port} = hd(Peers),
+    {ok, Pid} = peer:connect(self(), Metainfo, Address, Port),
+    {noreply, State};
+
 handle_cast(Msg, State) ->
     ?WARN("Unexpected cast ~p~n", [Msg]),
     {noreply, State}.
@@ -101,6 +104,10 @@ handle_cast(Msg, State) ->
 %% @doc Non gen-server message handler callbacks
 %% @end
 %%--------------------------------------------------------------------
+handle_info({'EXIT', TrackerPid, Reason}, State = #state{tracker_pid = TrackerPid}) ->
+    ?INFO("Got an exit from our tracker process (~p): ~p~n", [TrackerPid, Reason]),
+    {stop, tracker_process_down, State#state{tracker_pid = undefined}};
+
 handle_info(Info, State) ->
     ?WARN("Unexpected info ~p~n", [Info]),
     {noreply, State}.

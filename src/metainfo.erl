@@ -39,22 +39,12 @@ term_to_metainfo(Id, Term) ->
     #metainfo{id = Id, peer_id = PeerId, info_hash = InfoHash, announce = Announce, raw = Term}.
 
 info_hash(Term) ->
-    {ok, InfoDict} = fetch_value("info", Term),
+    {ok, InfoDict} = bencoding:search_dict("info", Term),
     {ok, InfoString} = bencoding:encode({dict, InfoDict}),
     {ok, crypto:sha(list_to_binary(InfoString))}.
 
 announce(Term) ->
-    fetch_value("announce", Term).
-
-fetch_value(Key, Metainfo) ->
-    case Metainfo of
-        {dict, Dict} ->
-            Search = {string, Key},
-            {value, {Search, {_, Value}}} = lists:keysearch(Search, 1, Dict),
-            {ok, Value};
-        _ ->
-            {error, not_a_dict}
-    end.
+    bencoding:search_dict("announce", Term).
 
 file_for_id(Id) ->
     lists:concat([directory_for_id(Id), "/torrent"]).

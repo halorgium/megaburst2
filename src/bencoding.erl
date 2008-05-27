@@ -9,7 +9,7 @@
 -include_lib("eunit.hrl").
 
 %% API
--export([encode/1, decode/1]).
+-export([encode/1, decode/1, search_dict/2]).
 
 %%====================================================================
 %% API
@@ -52,6 +52,21 @@ decode(String) ->
             {error, Reason}
     end.
 
+%%--------------------------------------------------------------------
+%% Function: search_dict/1
+%% Description: Return the value associated with a key inside a dict.
+%%--------------------------------------------------------------------
+search_dict(Key, Term) ->
+    case Term of
+        {dict, Dict} ->
+            Search = {string, Key},
+            {value, {Search, {_, Value}}} = lists:keysearch(Search, 1, Dict),
+            {ok, Value};
+        _ ->
+            {error, not_a_dict}
+    end.
+
+
 %%====================================================================
 %% Internal functions
 %%====================================================================
@@ -77,17 +92,20 @@ encode_dict_recurse([{K1, V1} | Rest], Accum) ->
     encode_dict_recurse(Rest, [V, K | Accum]).
 
 %% decoding
-decode_b(String) ->
+decode_b(Binary) when is_binary(Binary) ->
+    decode_b(binary_to_list(Binary));
+
+decode_b(String) when is_list(String) ->
     First = hd(String),
     case First of
         $i ->
             decode_integer(String);
-	$l ->
-	    decode_list(String);
-	$d ->
-	    decode_dict(String);
-	_S ->
-	    decode_string(String)
+        $l ->
+            decode_list(String);
+        $d ->
+            decode_dict(String);
+        _S ->
+            decode_string(String)
     end.
 
 

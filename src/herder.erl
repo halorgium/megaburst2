@@ -22,7 +22,7 @@
          terminate/2, code_change/3]).
 
 -record(state, {leech_sup_pid, leech_set}).
--record(leech_child, {metainfo, pid}).
+-record(leech_child, {pid, metainfo}).
 -define(SERVER, ?MODULE).
 
 %%====================================================================
@@ -75,10 +75,15 @@ init([]) ->
 %%--------------------------------------------------------------------
 handle_call({launch, Id}, _From, State = #state{leech_set = LeechSet}) ->
     {ok, Metainfo} = metainfo:read(Id),
-    {ok, Pid} = leech_sup:launch(Metainfo),
-    Child = #leech_child{metainfo = Metainfo, pid = Pid},
-    NewState = State#state{leech_set = [Child | LeechSet]},
-    {reply, {ok, Pid}, NewState};
+    case find_info_hash(Metainfo#metainfo.info_hash, LeechSet) of
+        {ok, _, _} ->
+            {reply, {error, already_started}, State};
+        not_found ->
+            {ok, Pid} = leech_sup:launch(Metainfo),
+            Child = #leech_child{pid = Pid, metainfo = Metainfo},
+            NewState = State#state{leech_set = [Child | LeechSet]},
+            {reply, {ok, Pid}, NewState}
+    end;
 
 handle_call({fetch, InfoHash}, _From, State = #state{leech_set = LeechSet}) ->
     Reply = find_info_hash(InfoHash, LeechSet),
@@ -110,6 +115,11 @@ handle_cast(Msg, State) ->
 %% @doc Non gen-server message handler callbacks
 %% @end
 %%--------------------------------------------------------------------
+handle_info({'EXIT', Pid, Reason}, State = #state{leech_set = LeechSet}) ->
+    ?INFO("Got an exit from ~p: ~p~n", [Pid, Reason]),
+    NewLeechSet = lists:keydelete(Pid, 3, LeechSet),
+    {noreply, State#state{leech_set = NewLeechSet}};
+
 handle_info(Info, State) ->
     ?WARN("Unexpected info ~p~n", [Info]),
     {noreply, State}.
@@ -138,10 +148,10 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-find_info_hash(InfoHash, [LeechChild = #leech_child{metainfo = Metainfo, pid = Pid} | Rest]) ->
+find_info_hash(InfoHash, [LeechChild = #leech_child{pid = Pid, metainfo = Metainfo} | Rest]) ->
     case Metainfo#metainfo.info_hash of
         InfoHash ->
-            {ok, Metainfo, Pid};
+            {ok, Pid, Metainfo};
         _ ->
             find_info_hash(InfoHash, Rest)
     end;

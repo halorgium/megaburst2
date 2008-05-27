@@ -12,16 +12,15 @@
 -include_lib("eunit.hrl").
 
 %% API
--export([start_link/2]).
+-export([start_link/2, announce/1]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
          handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
--export([offline/2, offline/3,
-         loading/2, loading/3]).
+-export([idle/2]).
 
--record(state, {leech_pid, metainfo}).
+-record(state, {leech_pid, metainfo, request_id}).
 
 %%====================================================================
 %% API
@@ -33,9 +32,10 @@
 %% does not return until Module:init/1 has returned.  
 %%--------------------------------------------------------------------
 start_link(LeechPid, Metainfo) ->
-    {ok, Pid} = gen_fsm:start_link(?MODULE, [LeechPid, Metainfo], []),
-    gen_fsm:send_event(Pid, load),
-    {ok, Pid}.
+    gen_fsm:start_link(?MODULE, [LeechPid, Metainfo], []).
+
+announce(Pid) ->
+    gen_fsm:send_event(Pid, announce).
 
 %%====================================================================
 %% gen_fsm callbacks
@@ -50,7 +50,7 @@ start_link(LeechPid, Metainfo) ->
 %% initialize. 
 %%--------------------------------------------------------------------
 init([LeechPid, Metainfo]) ->
-    {ok, offline, #state{leech_pid = LeechPid, metainfo = Metainfo}}.
+    {ok, idle, #state{leech_pid = LeechPid, metainfo = Metainfo}}.
 
 %%--------------------------------------------------------------------
 %% Function: 
@@ -64,15 +64,12 @@ init([LeechPid, Metainfo]) ->
 %% the current state name StateName is called to handle the event. It is also 
 %% called if a timeout occurs. 
 %%--------------------------------------------------------------------
-offline(load, State = #state{metainfo = Metainfo}) ->
+idle(announce, State = #state{metainfo = Metainfo}) ->
     Url = announce_url(Metainfo),
     ?INFO("Url: ~p~n", [Url]),
-    {ok, {{Version, 200, ReasonPhrase}, Headers, Body}} = http:request(get, {Url, []}, [], []),
-    {next_state, loading, State}.
-
-loading(Event, State) ->
-    ?INFO("Got event: ~p~n", [Event]),
-    {next_state, loading, State}.
+    {ok, RequestId} = http:request(get, {Url, []}, [], [{sync, false}]),
+    ?INFO("RequestId: ~p~n", [RequestId]),
+    {next_state, loading, State#state{request_id = RequestId}}.
 
 %%--------------------------------------------------------------------
 %% Function:
@@ -89,13 +86,6 @@ loading(Event, State) ->
 %% gen_fsm:sync_send_event/2,3, the instance of this function with the same
 %% name as the current state name StateName is called to handle the event.
 %%--------------------------------------------------------------------
-offline(_Event, _From, State) ->
-    Reply = ok,
-    {reply, Reply, state_name, State}.
-
-loading(_Event, _From, State) ->
-    Reply = ok,
-    {reply, Reply, state_name, State}.
 
 %%--------------------------------------------------------------------
 %% Function: 
@@ -140,8 +130,26 @@ handle_sync_event(_Event, _From, StateName, State) ->
 %% other message than a synchronous or asynchronous event
 %% (or a system message).
 %%--------------------------------------------------------------------
+handle_info({http, {RequestId, {{Version, 200, ReasonPhrase}, Headers, Body}}}, loading, State = #state{leech_pid = LeechPid, request_id = RequestId}) ->
+    ?INFO("Got body: ~p~n", [Body]),
+    {ok, Term} = bencoding:decode(Body),
+    ?INFO("Got term: ~p~n", [Term]),
+    {ok, Complete}    = bencoding:search_dict("complete", Term),
+    {ok, Incomplete}  = bencoding:search_dict("incomplete", Term),
+    {ok, Interval}    = bencoding:search_dict("interval", Term),
+    {ok, PeersString} = bencoding:search_dict("peers", Term),
+    PeersBinary       = list_to_binary(PeersString),
+    {ok, Peers}       = parse_peers(PeersBinary, []),
+    TrackerData = #tracker_data{complete   = Complete,
+                                incomplete = Incomplete,
+                                interval   = Interval,
+                                peers      = Peers},
+    ?INFO("TrackerData: ~p~n", [TrackerData]),
+    ok = leech:update(LeechPid, TrackerData),
+    {next_state, idle, State#state{request_id = undefined}};
+
 handle_info(Info, StateName, State) ->
-    ?INFO("Unexpected info msg ~p in state ~p~n", [Info, StateName]),
+    ?INFO("Unexpected info msg ~p in state ~p (~p)~n", [Info, StateName, State]),
     {next_state, StateName, State}.
 
 %%--------------------------------------------------------------------
@@ -196,7 +204,21 @@ encode_param(String) when is_list(String) ->
     ibrowse_lib:url_encode(String);
 
 encode_param(Binary) when is_binary(Binary) ->
-    ibrowse_lib:url_encode(binary_to_list(Binary)).
+    encode_param(binary_to_list(Binary)).
+
+parse_peers(<<A:8,B:8,C:8,D:8,Port:16,Rest/binary>>, PeersList) ->
+    Peer = {{A, B, C, D}, Port},
+    case lists:member(Peer, PeersList) of
+        true ->
+            ?INFO("Found a duplicate peer: ~p~n", [Peer]),
+            parse_peers(Rest, PeersList);
+        false ->
+            ?INFO("Found a new peer: ~p~n", [Peer]),
+            parse_peers(Rest, [Peer | PeersList])
+    end;
+
+parse_peers(<<>>, PeersList) ->
+    {ok, lists:reverse(PeersList)}.
 
 %% Tests
 encode_param_test() ->

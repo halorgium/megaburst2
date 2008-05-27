@@ -1,1 +1,2 @@
 -record(metainfo, {id, peer_id, info_hash, announce, raw}).
+-record(tracker_data, {complete, incomplete, interval, peers}).

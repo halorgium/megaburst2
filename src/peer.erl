@@ -19,9 +19,9 @@
          handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
 -export([waiting_for_socket/2,
-         idle/3]).
+         idle/2]).
 
--record(state, {socket, buffer, leech_pid, metainfo}).
+-record(state, {buffer, socket, leech_pid, metainfo}).
 
 -define(PROTOCOL_STRING, "BitTorrent protocol").
 -define(RESERVED_BYTES, 0:64/big).
@@ -38,9 +38,9 @@
 start_link() ->
     gen_fsm:start_link(?MODULE, [waiting_for_socket], []).
 
-connect(Metainfo, LeechPid, Host, Port) ->
+connect(LeechPid, Metainfo, Address, Port) ->
     {ok, Pid} = gen_fsm:start_link(?MODULE, [idle], []),
-    gen_fsm:sync_send_event(Pid, {connect, Metainfo, LeechPid, Host, Port}),
+    ok = gen_fsm:send_event(Pid, {connect, LeechPid, Metainfo, Address, Port}),
     {ok, Pid}.
 
 % This is called by the gen_socket_listener process to
@@ -79,10 +79,14 @@ init([InitialStateName]) ->
 %% called if a timeout occurs. 
 %%--------------------------------------------------------------------
 waiting_for_socket({socket_ready, Socket}, State) ->
-    ?INFO("made connection: ~p~n", [Socket]),
+    ?INFO("got incoming connection: ~p~n", [Socket]),
     inet:setopts(Socket, [{active, true}, {packet, raw}, binary]),
-    NewState = State#state{socket = Socket},
-    {next_state, handshaking, NewState}.
+    {next_state, handshaking, State#state{socket = Socket}}.
+
+idle({connect, LeechPid, Metainfo, Address, Port}, State) ->
+    {ok, Socket} = gen_tcp:connect(Address, Port, [{active, true}, {packet, raw}, binary]),
+    ok = gen_tcp:send(Socket, handshake_for(Metainfo#metainfo.info_hash)),
+    {next_state, sent_handshake, State#state{socket = Socket, leech_pid = LeechPid, metainfo = Metainfo}}.
 
 %%--------------------------------------------------------------------
 %% Function:
@@ -99,10 +103,6 @@ waiting_for_socket({socket_ready, Socket}, State) ->
 %% gen_fsm:sync_send_event/2,3, the instance of this function with the same
 %% name as the current state name StateName is called to handle the event.
 %%--------------------------------------------------------------------
-idle({connect, Metainfo, LeechPid, Host, Port}, _From, State) ->
-    {ok, Socket} = gen_tcp:connect(Host, Port, [{packet, raw}, binary]),
-    ok = gen_tcp:send(Socket, handshake_for(Metainfo#metainfo.info_hash)),
-    {reply, ok, sent_handshake, State#state{socket = Socket, metainfo = Metainfo, leech_pid = LeechPid}}.
 
 %%--------------------------------------------------------------------
 %% Function: 
@@ -206,9 +206,9 @@ handle_data(sent_handshake, <<19:8,?PROTOCOL_STRING,Reserved:8/binary,InfoHash:2
 handle_data(handshaking, <<19:8,?PROTOCOL_STRING,Reserved:8/binary,InfoHash:20/binary,Rest/binary>>, State) ->
     ?INFO("got InfoHash: ~s~n", [InfoHash]),
     case herder:fetch(InfoHash) of
-        {ok, Metainfo, LeechPid} ->
+        {ok, LeechPid, Metainfo} ->
             ?INFO("valid InfoHash~n", []),
-            {reply, waiting_for_peer_id, [handshake_for(Metainfo#metainfo.info_hash), Metainfo#metainfo.peer_id], Rest, State#state{metainfo = Metainfo, leech_pid = LeechPid}};
+            {reply, waiting_for_peer_id, [handshake_for(Metainfo#metainfo.info_hash), Metainfo#metainfo.peer_id], Rest, State#state{leech_pid = LeechPid, metainfo = Metainfo}};
         not_found ->
             {no_reply, info_hash_missing, <<>>, State}
     end;
