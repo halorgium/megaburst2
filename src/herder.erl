@@ -9,18 +9,20 @@
 -behaviour(gen_server).
 
 -include_lib("logging.hrl").
+-include_lib("records.hrl").
 -include_lib("eunit.hrl").
 
 %% API
 -export([start_link/0,
-         launch/1]).
+         launch/1,
+         fetch/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -record(state, {leech_sup_pid, leech_set}).
--record(leech_child, {id, pid}).
+-record(leech_child, {metainfo, pid}).
 -define(SERVER, ?MODULE).
 
 %%====================================================================
@@ -72,14 +74,15 @@ init([]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({launch, Id}, _From, State = #state{leech_set = LeechSet}) ->
-    {ok, Pid} = leech_sup:launch(Id),
-    Child = #leech_child{id = Id, pid = Pid},
+    {ok, Metainfo} = metainfo:read(Id),
+    {ok, Pid} = leech_sup:launch(Metainfo),
+    Child = #leech_child{metainfo = Metainfo, pid = Pid},
     NewState = State#state{leech_set = [Child | LeechSet]},
     {reply, {ok, Pid}, NewState};
 
 handle_call({fetch, InfoHash}, _From, State = #state{leech_set = LeechSet}) ->
-    #leech_child{pid = Pid} = hd(LeechSet),
-    {reply, {ok, Pid}, State};
+    Reply = find_info_hash(InfoHash, LeechSet),
+    {reply, Reply, State};
 
 handle_call(Call, _From, State) ->
     ?WARN("Unexpected call ~p~n", [Call]),
@@ -135,3 +138,13 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+find_info_hash(InfoHash, [LeechChild = #leech_child{metainfo = Metainfo, pid = Pid} | Rest]) ->
+    case Metainfo#metainfo.info_hash of
+        InfoHash ->
+            {ok, Metainfo, Pid};
+        _ ->
+            find_info_hash(InfoHash, Rest)
+    end;
+
+find_info_hash(_InfoHash, []) ->
+    not_found.

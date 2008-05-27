@@ -9,6 +9,7 @@
 -behaviour(gen_server).
 
 -include_lib("logging.hrl").
+-include_lib("records.hrl").
 -include_lib("eunit.hrl").
 
 %% API
@@ -19,7 +20,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {id, metainfo}).
+-record(state, {metainfo}).
 
 %%====================================================================
 %% API
@@ -29,8 +30,8 @@
 %% @doc Starts the server
 %% @end
 %%--------------------------------------------------------------------
-start_link(Filename) ->
-    gen_server:start_link(?MODULE, [Filename], []).
+start_link(Metainfo) ->
+    gen_server:start_link(?MODULE, [Metainfo], []).
 
 status(Pid) ->
     gen_server:call(Pid, status).
@@ -48,10 +49,10 @@ status(Pid) ->
 %% @doc Initialises the server's state
 %% @end
 %%--------------------------------------------------------------------
-init([Id]) ->
-    ?INFO("Starting a leech: ~p~n", [Id]),
+init([Metainfo]) ->
+    ?INFO("Starting a leech: ~p~n", [Metainfo#metainfo.id]),
     process_flag(trap_exit, true),
-    State = #state{id = Id, metainfo = read_metainfo(Id)},
+    State = #state{metainfo = Metainfo},
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -128,11 +129,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-read_metainfo(Id) ->
-    Path = lists:concat([directory_for_id(Id), "/torrent"]),
-    {ok, Metainfo} = metainfo:read(Path),
-    Metainfo.
-
-directory_for_id(Id) ->
-    {ok, Dir} = application:get_env(megaburst2, data_dir),
-    lists:concat([Dir, "/", Id]).

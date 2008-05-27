@@ -31,9 +31,9 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-launch(Filename) ->
-    Spec = leech_master_spec(Filename),
-    ?INFO("Wanting to spawn a leech master: ~p~n", [Spec]),
+launch(Metainfo) ->
+    Spec = leech_master_spec(Metainfo),
+    ?INFO("Wanting to spawn a leech master~n", []),
     {ok, Pid} = supervisor:start_child(?SERVER, Spec),
     gen_server:call(Pid, start),
     {ok, Pid}.
@@ -54,14 +54,14 @@ launch(Filename) ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    {ok,{{one_for_one,1,60}, []}}.
+    {ok,{{one_for_one,0,1}, []}}.
 
 %%====================================================================
 %% Internal functions
 %%====================================================================
-leech_master_spec(Filename) ->
+leech_master_spec(Metainfo) ->
     {{leech, make_ref()},
-     {leech,start_link,[Filename]},
+     {leech,start_link,[Metainfo]},
      permanent,2000,worker,
      [leech]
     }.

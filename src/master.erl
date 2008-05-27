@@ -55,7 +55,7 @@ init([]) ->
                  permanent,2000,supervisor,
                  [gen_socket_listener_sup]
                 }],
-    {ok,{{one_for_one,1,60}, Children}}.
+    {ok,{{one_for_one,0,1}, Children}}.
 
 %%====================================================================
 %% Internal functions

@@ -51,7 +51,7 @@ shell_args:
 	@(echo -ne "rr(\"include/*\").\nlists:map(fun(A) -> {A,application:start(A)} end, [${APP_DEPS}]).\napplication:start(${APP_NAME})." | pbcopy)
 
 shell: ${BEAM_FILES}
-	erl +K true -smp +A 10 ${NODE} -config priv/${APP_NAME} $(CODEPATH)
+	erl +K true -smp +A 10 ${NODE} -s megaburst2 start -config priv/${APP_NAME} $(CODEPATH)
 
 dialyzer.report: ${BEAM_FILES}
 	@(dialyzer --verbose --succ_typings ${INCLUDE} ${A_EBIN_DIRS} -c ${BEAM_FILES} ${EXTRA_DIALYZER_BEAM_FILES}; if [ $$? != 1 ]; then true; else false; fi)

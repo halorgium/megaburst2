@@ -8,6 +8,7 @@
 -behaviour(gen_fsm).
 
 -include_lib("logging.hrl").
+-include_lib("records.hrl").
 -include_lib("eunit.hrl").
 
 %% API
@@ -20,7 +21,7 @@
 -export([offline/2, offline/3,
          loading/2, loading/3]).
 
--record(state, {leech, torrent}).
+-record(state, {leech_pid, metainfo}).
 
 %%====================================================================
 %% API
@@ -31,8 +32,8 @@
 %% initialize. To ensure a synchronized start-up procedure, this function
 %% does not return until Module:init/1 has returned.  
 %%--------------------------------------------------------------------
-start_link(LeechPid, Torrent) ->
-    {ok, Pid} = gen_fsm:start_link(?MODULE, [LeechPid, Torrent], []),
+start_link(LeechPid, Metainfo) ->
+    {ok, Pid} = gen_fsm:start_link(?MODULE, [LeechPid, Metainfo], []),
     gen_fsm:send_event(Pid, load),
     {ok, Pid}.
 
@@ -48,8 +49,8 @@ start_link(LeechPid, Torrent) ->
 %% gen_fsm:start_link/3,4, this function is called by the new process to 
 %% initialize. 
 %%--------------------------------------------------------------------
-init([LeechPid, Torrent]) ->
-    {ok, offline, #state{leech = LeechPid, torrent = Torrent}}.
+init([LeechPid, Metainfo]) ->
+    {ok, offline, #state{leech_pid = LeechPid, metainfo = Metainfo}}.
 
 %%--------------------------------------------------------------------
 %% Function: 
@@ -63,8 +64,8 @@ init([LeechPid, Torrent]) ->
 %% the current state name StateName is called to handle the event. It is also 
 %% called if a timeout occurs. 
 %%--------------------------------------------------------------------
-offline(load, State = #state{torrent = Torrent}) ->
-    Url = announce_url("foo"),
+offline(load, State = #state{metainfo = Metainfo}) ->
+    Url = announce_url(Metainfo),
     ?INFO("Url: ~p~n", [Url]),
     {ok, {{Version, 200, ReasonPhrase}, Headers, Body}} = http:request(get, {Url, []}, [], []),
     {next_state, loading, State}.
@@ -164,11 +165,9 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-announce_url(M) ->
-    Params = [{"info_hash",
-               "X%86%C3B%02%E6%3D%18Y%D4%FCb%E1%DB%0B%F70%B6%40%8A"},
-              {"peer_id",
-               "T03I-----Pnku-i7sfPF"},
+announce_url(#metainfo{peer_id = PeerId, info_hash = InfoHash, announce = Announce}) ->
+    Params = [{"info_hash", InfoHash},
+              {"peer_id", PeerId},
               {"compact", "1"},
               {"event", "started"},
               {"uploaded", "0"},
@@ -176,30 +175,35 @@ announce_url(M) ->
               {"left", "0"},
               {"port", "9999"}],
     EncodedParams = encode_params(Params),
-    Url = "http://localhost:8080/announce",
-    lists:flatten(io_lib:format("~s?~s", [Url, EncodedParams])).
+    lists:flatten(io_lib:format("~s?~s", [Announce, EncodedParams])).
 
 encode_params(Params) ->
-    encode_params(Params, []).
+    lists:flatten(encode_params(Params, [])).
 
 encode_params([{Key,Value}], EncodedParams) ->
-    Str = encode_param(Key, Value),
+    Str = encode_key_value(Key, Value),
     NewEncodedParams = [Str | EncodedParams],
     lists:reverse(NewEncodedParams);
 
 encode_params([{Key,Value} | Rest], EncodedParams) ->
-    Str = encode_param(Key, Value),
+    Str = encode_key_value(Key, Value),
     encode_params(Rest, ["&", Str | EncodedParams]).
 
-encode_param(Key, Value) ->
-    lists:flatten(io_lib:format("~s=~s", [Key, Value])).
+encode_key_value(Key, Value) ->
+    lists:flatten(io_lib:format("~s=~s", [encode_param(Key), encode_param(Value)])).
+
+encode_param(String) when is_list(String) ->
+    ibrowse_lib:url_encode(String);
+
+encode_param(Binary) when is_binary(Binary) ->
+    ibrowse_lib:url_encode(binary_to_list(Binary)).
 
 %% Tests
 encode_param_test() ->
-    "foo=bar" = encode_param("foo", "bar").
+    "foo" = encode_param("foo").
 encode_params_test() ->
     "foo=bar" = encode_params([{"foo", "bar"}]).
 encode_params_2_test() ->
     "foo=bar&baz=qux" = encode_params([{"foo", "bar"}, {"baz", "qux"}]).
 announce_url_test() ->
-    "foo=bar&baz=qux" = announce_url(aa).
+    "foo=bar&baz=qux" = announce_url(metainfo).

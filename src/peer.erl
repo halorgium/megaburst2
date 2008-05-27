@@ -8,19 +8,20 @@
 -behaviour(gen_fsm).
 
 -include_lib("logging.hrl").
+-include_lib("records.hrl").
 -include_lib("eunit.hrl").
 
 %% API
--export([start_link/0, set_socket/2]).
+-export([start_link/0, connect/4, set_socket/2]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
          handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
--export([waiting_for_socket/2, waiting_for_socket/3, 
-         handshaking/2, handshaking/3]).
+-export([waiting_for_socket/2,
+         idle/3]).
 
--record(state, {socket, buffer, leech_pid}).
+-record(state, {socket, buffer, leech_pid, metainfo}).
 
 -define(PROTOCOL_STRING, "BitTorrent protocol").
 -define(RESERVED_BYTES, 0:64/big).
@@ -35,7 +36,12 @@
 %% does not return until Module:init/1 has returned.  
 %%--------------------------------------------------------------------
 start_link() ->
-    gen_fsm:start_link(?MODULE, [], []).
+    gen_fsm:start_link(?MODULE, [waiting_for_socket], []).
+
+connect(Metainfo, LeechPid, Host, Port) ->
+    {ok, Pid} = gen_fsm:start_link(?MODULE, [idle], []),
+    gen_fsm:sync_send_event(Pid, {connect, Metainfo, LeechPid, Host, Port}),
+    {ok, Pid}.
 
 % This is called by the gen_socket_listener process to
 % pass the socket that a new connection process will be
@@ -57,9 +63,8 @@ set_socket(Pid, Socket) ->
 %% gen_fsm:start_link/3,4, this function is called by the new process to 
 %% initialize. 
 %%--------------------------------------------------------------------
-init([]) ->
-    process_flag(trap_exit, true),
-    {ok, waiting_for_socket, #state{buffer = <<>>}}.
+init([InitialStateName]) ->
+    {ok, InitialStateName, #state{}}.
 
 %%--------------------------------------------------------------------
 %% Function: 
@@ -79,14 +84,6 @@ waiting_for_socket({socket_ready, Socket}, State) ->
     NewState = State#state{socket = Socket},
     {next_state, handshaking, NewState}.
 
-handshaking({data, <<19:8,?PROTOCOL_STRING,Reserved:8/binary,InfoHash:20/binary,Rest/binary>>}, State = #state{socket = Socket, buffer = Buffer}) ->
-    ?INFO("got InfoHash: ~s~n", [InfoHash]),
-    deliver_handshake(Socket, InfoHash),
-    {next_state, handshaking, State#state{buffer = list_to_binary([Buffer, Rest])}};
-
-handshaking({data, Data}, State = #state{socket = Socket, buffer = Buffer}) ->
-    {next_state, handshaking, State#state{buffer = list_to_binary([Buffer, Data])}}.
-
 %%--------------------------------------------------------------------
 %% Function:
 %% state_name(Event, From, State) -> {next_state, NextStateName, NextState} |
@@ -102,20 +99,17 @@ handshaking({data, Data}, State = #state{socket = Socket, buffer = Buffer}) ->
 %% gen_fsm:sync_send_event/2,3, the instance of this function with the same
 %% name as the current state name StateName is called to handle the event.
 %%--------------------------------------------------------------------
-waiting_for_socket(_Event, _From, State) ->
-    Reply = ok,
-    {reply, Reply, state_name, State}.
-
-handshaking(_Event, _From, State) ->
-    Reply = ok,
-    {reply, Reply, state_name, State}.
+idle({connect, Metainfo, LeechPid, Host, Port}, _From, State) ->
+    {ok, Socket} = gen_tcp:connect(Host, Port, [{packet, raw}, binary]),
+    ok = gen_tcp:send(Socket, handshake_for(Metainfo#metainfo.info_hash)),
+    {reply, ok, sent_handshake, State#state{socket = Socket, metainfo = Metainfo, leech_pid = LeechPid}}.
 
 %%--------------------------------------------------------------------
 %% Function: 
 %% handle_event(Event, StateName, State) -> {next_state, NextStateName, 
-%%						  NextState} |
+%%                                           NextState} |
 %%                                          {next_state, NextStateName, 
-%%					          NextState, Timeout} |
+%%                                           NextState, Timeout} |
 %%                                          {stop, Reason, NewState}
 %% Description: Whenever a gen_fsm receives an event sent using
 %% gen_fsm:send_all_state_event/2, this function is called to handle
@@ -153,13 +147,15 @@ handle_sync_event(_Event, _From, StateName, State) ->
 %% other message than a synchronous or asynchronous event
 %% (or a system message).
 %%--------------------------------------------------------------------
-handle_info({tcp, Socket, Data}, StateName, State = #state{socket = Socket}) ->
-    gen_fsm:send_event(self(), {data, Data}),
-    {next_state, StateName, State};
+handle_info({tcp, Socket, Data}, StateName, State = #state{buffer = Buffer}) when is_binary(Buffer) ->
+    handle_info({tcp, Socket, list_to_binary([Buffer, Data])}, StateName, State#state{buffer = undefined});
+
+handle_info({tcp, Socket, Data}, StateName, State) ->
+    ?INFO("Got data: ~p~n", [Data]),
+    consume_data(StateName, Data, State, Socket);
 
 handle_info({tcp_closed, Socket}, StateName, State = #state{socket = Socket}) ->
     ?INFO("socket is closed: ~p~n", [Socket]),
-    gen_fsm:send_event(self(), tcp_closed),
     {next_state, StateName, State};
 
 handle_info(Info, StateName, State) ->
@@ -187,5 +183,71 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-deliver_handshake(Socket, InfoHash) ->
-    gen_tcp:send(Socket, <<19,?PROTOCOL_STRING,?RESERVED_BYTES,InfoHash,"T03I-----Pnku-i7sfPF">>).
+consume_data(StateName, Data, State, Socket) ->
+    case handle_data(StateName, Data, State) of
+        incomplete ->
+            ?WARN("incomplete data in ~p: ~p~n", [StateName, Data]),
+            {next_state, StateName, State#state{buffer = Data}};
+        {noreply, NewStateName, Rest, NewState} when is_atom(NewStateName) ->
+            consume_data(NewStateName, Rest, NewState, Socket);
+        {reply, NewStateName, ReplyData, Rest, NewState} when is_atom(NewStateName) ->
+            ok = gen_tcp:send(Socket, ReplyData),
+            consume_data(NewStateName, Rest, NewState, Socket);
+        E ->
+            {stop, {handle_data_fail, E}, State}
+    end.
+
+handle_data(sent_handshake, <<19:8,?PROTOCOL_STRING,Reserved:8/binary,InfoHash:20/binary,RemotePeerId:20/binary,Rest/binary>>, State = #state{metainfo = Metainfo}) ->
+    ?INFO("got InfoHash: ~s, PeerId: ~s~n", [InfoHash, RemotePeerId]),
+    InfoHash = Metainfo#metainfo.info_hash,
+    PeerId = Metainfo#metainfo.peer_id,
+    {reply, running, PeerId, Rest, State};
+
+handle_data(handshaking, <<19:8,?PROTOCOL_STRING,Reserved:8/binary,InfoHash:20/binary,Rest/binary>>, State) ->
+    ?INFO("got InfoHash: ~s~n", [InfoHash]),
+    case herder:fetch(InfoHash) of
+        {ok, Metainfo, LeechPid} ->
+            ?INFO("valid InfoHash~n", []),
+            {reply, waiting_for_peer_id, [handshake_for(Metainfo#metainfo.info_hash), Metainfo#metainfo.peer_id], Rest, State#state{metainfo = Metainfo, leech_pid = LeechPid}};
+        not_found ->
+            {no_reply, info_hash_missing, <<>>, State}
+    end;
+
+handle_data(waiting_for_peer_id, <<PeerId:20/binary,Rest/binary>>, State) ->
+    ?INFO("got PeerId: ~s~n", [PeerId]),
+    {noreply, running, Rest, State};
+
+handle_data(running, <<0:32,Rest/binary>>, State) ->
+    ?INFO("got keepalive~n", []),
+    {noreply, running, Rest, State};
+
+handle_data(running, <<1:32,0,Rest/binary>>, State) ->
+    ?INFO("got choke~n", []),
+    {noreply, running, Rest, State};
+
+handle_data(running, <<1:32,1,Rest/binary>>, State) ->
+    ?INFO("got unchoke~n", []),
+    {noreply, running, Rest, State};
+
+handle_data(running, <<1:32,2,Rest/binary>>, State) ->
+    ?INFO("got interested~n", []),
+    {noreply, running, Rest, State};
+
+handle_data(running, <<1:32,3,Rest/binary>>, State) ->
+    ?INFO("got not interested~n", []),
+    {noreply, running, Rest, State};
+
+handle_data(running, <<5:32,4,PieceIndex:4/binary,Rest/binary>>, State) ->
+    ?INFO("got have: PieceIndex: ~p~n", [PieceIndex]),
+    {noreply, running, Rest, State};
+
+handle_data(running, <<BitFieldLen:32,5,BitFieldPlusOne:BitFieldLen/binary,Rest/binary>>, State) ->
+    {BitField, PlusOne} = split_binary(BitFieldPlusOne, BitFieldLen - 1),
+    ?INFO("got BitField: ~p~n", [BitField]),
+    {noreply, running, list_to_binary([PlusOne, Rest]), State};
+
+handle_data(_StateName, _Data, _State) ->
+    incomplete.
+
+handshake_for(InfoHash) ->
+    [19, ?PROTOCOL_STRING, <<?RESERVED_BYTES>>, InfoHash].

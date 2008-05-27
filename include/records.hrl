@@ -1,1 +1,1 @@
--record(metainfo, {info_hash, announce, raw}).
+-record(metainfo, {id, peer_id, info_hash, announce, raw}).
