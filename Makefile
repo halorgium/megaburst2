@@ -35,10 +35,10 @@ info:
 	@echo Extra dialyzer beam files: ${EXTRA_DIALYZER_BEAM_FILES}
 
 clean:
-	rm -f ${BEAM_FILES} priv/sasl/* priv/sasl.log
+	rm -f ebin/*.beam priv/sasl/* priv/sasl.log
 
 ebin/%.beam: src/%.erl ${HRL_FILES}
-	@echo -n "$@: "
+	@echo "$@: "
 	erlc ${ERLC_FLAGS} ${ERLC_CODEPATH} ${INCLUDE} $<
 
 docs: ${ERL_FILES}

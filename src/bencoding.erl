@@ -1,12 +1,15 @@
+%% @author Tim Carey-Smith <dev@spork.in>
+%% @version {@vsn}, {@date} {@time}
+%% @doc encoding and decoding for the bencoding format
+%% @end
+%%%-------------------------------------------------------------------
 -module(bencoding).
--author("Tim Carey-Smith <tim@spork.in>").
--vsn("1.0").
 
 -include_lib("logging.hrl").
 -include_lib("eunit.hrl").
 
 %% API
--export([encode/1, decode/1, parse/1]).
+-export([encode/1, decode/1]).
 
 %%====================================================================
 %% API
@@ -47,19 +50,6 @@ decode(String) ->
             {error, extra_data_given};
         {error, Reason} ->
             {error, Reason}
-    end.
-
-%%--------------------------------------------------------------------
-%% Function: parse/1
-%% Description: Parse a file into an erlang term.
-%%--------------------------------------------------------------------
-parse(FileName) ->
-    case file:read_file(FileName) of
-        {ok, Data} ->
-            String = binary_to_list(Data),
-	    decode(String);
-        E ->
-            E
     end.
 
 %%====================================================================

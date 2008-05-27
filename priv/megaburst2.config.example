@@ -1,0 +1,5 @@
+[{megaburst2, [
+    {data_dir, "/path/to/data"}
+]}].
+
+% vim:filetype=erlang
